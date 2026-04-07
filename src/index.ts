@@ -10,8 +10,6 @@ import {
 } from "./constants";
 import { generateHeadersOriginal } from "./headers";
 import { processM3u8Line, resolveUrl, buildProxyPath } from "./processor";
-import { serveStatic } from 'hono/bun'
-
 
 // ─── URL Encryption (XOR + base64url) ────────────────────────────────────────
 
@@ -51,7 +49,6 @@ const trustedOrigins = Array.from(ALLOWED_ORIGINS);
 const app = new Hono()
 
 app.use(logger())
-app.use('/.well-known/*', serveStatic({ root: './' }))
 
 app.use(
   cors({

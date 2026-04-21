@@ -51,7 +51,7 @@ export const DOMAIN_GROUPS: DomainGroup[] = [
         referer: "https://krussdomi.com/",
     },
     {
-        patterns: [/(?:^|\.)owocdn\.top$/i],
+        patterns: [/(?:^|\.)owocdn\.top$/i, /(?:^|\.)uwucdn\.top$/i],
         origin: "https://kwik.cx",
         referer: "https://kwik.cx/",
     },

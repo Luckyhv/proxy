@@ -2,7 +2,9 @@
   "name": "proxy",
   "scripts": {
     "dev": "bun run --hot src/index.ts",
-    "start": "bun run src/index.ts"
+    "start": "bun run src/index.ts",
+    "build": "bun build src/index.ts --target=bun --outdir=dist",
+    "typecheck": "bun x tsc --noEmit"
   },
   "dependencies": {
     "hono": "^4.12.11"

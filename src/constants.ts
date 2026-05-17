@@ -12,12 +12,41 @@ export const DEFAULT_HEADERS: Record<string, string> = {
     "sec-fetch-site": "cross-site",
 };
 
-export const ALLOWED_ORIGINS = new Set(
+function readNumberEnv(name: string, fallback: number): number {
+    const raw = process.env[name];
+    if (!raw) return fallback;
+
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+export const ALLOWED_ORIGINS: Set<string> = new Set(
     (process.env.ALLOWED_ORIGINS ?? "")
         .split(",")
-        .map((s) => s.trim())
+        .map((s: string) => s.trim())
         .filter(Boolean)
 );
+
+export const ALLOWED_TARGET_HOSTS: Set<string> = new Set(
+    (process.env.ALLOWED_TARGET_HOSTS ?? "")
+        .split(",")
+        .map((s: string) => s.trim().toLowerCase())
+        .filter(Boolean)
+);
+
+export const ALLOW_PRIVATE_TARGETS = process.env.ALLOW_PRIVATE_TARGETS === "true";
+export const FETCH_TIMEOUT_MS = readNumberEnv("FETCH_TIMEOUT_MS", 15_000);
+export const MAX_POST_BODY_BYTES = readNumberEnv("MAX_POST_BODY_BYTES", 2 * 1024 * 1024);
+export const MAX_MANIFEST_BYTES = readNumberEnv("MAX_MANIFEST_BYTES", 2 * 1024 * 1024);
+export const MAX_CONCURRENT_UPSTREAM = readNumberEnv("MAX_CONCURRENT_UPSTREAM", 256);
+export const HLS_PREFETCH_CONCURRENCY = readNumberEnv("HLS_PREFETCH_CONCURRENCY", 24);
+export const HLS_PREFETCH_LIMIT = readNumberEnv("HLS_PREFETCH_LIMIT", 48);
+export const HLS_PREFETCH_ENABLED = process.env.HLS_PREFETCH_ENABLED !== "false";
+
+export const PROXY_CACHE_MAX_BYTES = readNumberEnv("PROXY_CACHE_MAX_BYTES", 512 * 1024 * 1024);
+export const PROXY_CACHE_MAX_ENTRY_BYTES = readNumberEnv("PROXY_CACHE_MAX_ENTRY_BYTES", 64 * 1024 * 1024);
+export const SEGMENT_CACHE_TTL_SECONDS = readNumberEnv("SEGMENT_CACHE_TTL_SECONDS", 6 * 60 * 60);
+export const MANIFEST_CACHE_TTL_SECONDS = readNumberEnv("MANIFEST_CACHE_TTL_SECONDS", 15);
 
 export const CORS_HEADERS: Record<string, string> = {
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS, HEAD",
@@ -74,3 +103,4 @@ export const BLACKLIST_HEADERS = new Set([
 ]);
 
 export const MEDIA_CACHE_CONTROL = "public, max-age=31536000, s-maxage=31536000, immutable";
+export const MANIFEST_CACHE_CONTROL = `public, max-age=${MANIFEST_CACHE_TTL_SECONDS}, s-maxage=${MANIFEST_CACHE_TTL_SECONDS}, stale-while-revalidate=60`;

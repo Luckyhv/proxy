@@ -85,7 +85,7 @@ app.get("/", (c) => c.json({ status: "Online" }));
 
 
 // ─── Proxy ───────────────────────────────────────────────────────────────────
-app.on(["GET", "POST", "HEAD"], "/proxy/:encrypted", async (c) => {
+app.on(["GET", "POST", "HEAD"], "/stream/:encrypted", async (c) => {
   const method = c.req.method;
 
   const targetUrlRaw = decryptUrl(c.req.param("encrypted"));

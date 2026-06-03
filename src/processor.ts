@@ -11,7 +11,7 @@ export function resolveUrl(line: string, base: URL): URL {
 }
 
 export function buildProxyPath(url: URL, encrypt: (u: string) => string): string {
-    return "/proxy/" + encrypt(url.href);
+    return "/stream/" + encrypt(url.href);
 }
 
 /**

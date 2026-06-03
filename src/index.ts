@@ -94,6 +94,11 @@ app.on(["GET", "POST", "HEAD"], "/stream/:encrypted", async (c) => {
 
   const pathname = targetUrl.pathname;
   const upstreamHeaders = generateHeadersOriginal(targetUrl);
+  const originParam = c.req.query("origin");
+  if (originParam) {
+    upstreamHeaders["origin"] = originParam;
+    upstreamHeaders["referer"] = originParam.endsWith("/") ? originParam : `${originParam}/`;
+  }
 
   // Forward standard headers
   const clientHeaders = c.req.raw.headers;

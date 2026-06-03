@@ -13,34 +13,45 @@ import { processM3u8Line, resolveUrl, buildProxyPath } from "./processor";
 
 // ─── URL Encryption (XOR + base64url) ────────────────────────────────────────
 
-const XOR_KEY = process.env.XOR_KEY ?? "";
+const SECRET_KEY = process.env.SECRET_KEY || "aproxy2026";
+
+function xorWithSecret(data: Uint8Array, secret: string): void {
+  if (!secret || secret.length === 0) return;
+  for (let i = 0; i < data.length; i++) {
+    data[i] ^= secret.charCodeAt(i % secret.length);
+  }
+}
 
 function decryptUrl(encrypted: string): string | null {
   try {
-    const b64 = encrypted.replace(/-/g, "+").replace(/_/g, "/");
-    const raw = atob(b64);
-    const key = new TextEncoder().encode(XOR_KEY);
-    const bytes = new Uint8Array(raw.length);
-    for (let i = 0; i < raw.length; i++) {
-      bytes[i] = raw.charCodeAt(i) ^ key[i % key.length];
+    const data = new Uint8Array(Buffer.from(encrypted, "base64url"));
+    xorWithSecret(data, SECRET_KEY);
+
+    let nullIdx = -1;
+    for (let i = 0; i < data.length; i++) {
+      if (data[i] === 0x00) { nullIdx = i; break; }
     }
-    return new TextDecoder().decode(bytes);
+
+    const targetURL =
+      nullIdx === -1
+        ? new TextDecoder().decode(data)
+        : new TextDecoder().decode(data.subarray(0, nullIdx));
+    return targetURL;
   } catch {
     return null;
   }
 }
 
-export function encryptUrl(url: string): string {
-  const data = new TextEncoder().encode(url);
-  const key = new TextEncoder().encode(XOR_KEY);
-  const result = new Uint8Array(data.length);
-  for (let i = 0; i < data.length; i++) {
-    result[i] = data[i] ^ key[i % key.length];
-  }
-  return btoa(String.fromCharCode(...result))
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
+export function encryptUrl(url: string, referer = ""): string {
+  const target = new TextEncoder().encode(url);
+  const ref = new TextEncoder().encode(referer);
+  const payload = new Uint8Array(target.length + 1 + ref.length);
+  payload.set(target, 0);
+  payload[target.length] = 0x00;
+  payload.set(ref, target.length + 1);
+
+  xorWithSecret(payload, SECRET_KEY);
+  return Buffer.from(payload).toString("base64url");
 }
 
 const trustedOrigins = Array.from(ALLOWED_ORIGINS);

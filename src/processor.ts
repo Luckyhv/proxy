@@ -10,8 +10,8 @@ export function resolveUrl(line: string, base: URL): URL {
     }
 }
 
-export function buildProxyPath(url: URL, encrypt: (u: string) => string): string {
-    return "/stream/" + encrypt(url.href);
+export function buildProxyPath(url: URL, encrypt: (u: string) => string, path = "/stream/"): string {
+    return path + encrypt(url.href);
 }
 
 /**
@@ -47,7 +47,7 @@ function rewriteUriAttrs(attrs: string, scrapeUrl: URL, encrypt: (u: string) => 
             if (parsed) {
                 const [value, afterClose] = parsed;
                 const resolved = resolveUrl(value, scrapeUrl);
-                result += `${sep}${trimmedKey}="${buildProxyPath(resolved, encrypt)}"`;
+                result += `${sep}${trimmedKey}="${buildProxyPath(resolved, encrypt, "/hls/")}"`;
                 i = afterClose;
                 continue;
             }
@@ -91,5 +91,5 @@ export function processM3u8Line(
     }
 
     const resolved = resolveUrl(line, scrapeUrl);
-    return buildProxyPath(resolved, encrypt);
+    return buildProxyPath(resolved, encrypt, "/hls/");
 }

@@ -87,8 +87,10 @@ app.get("/", (c) => c.json({ status: "Online" }));
 
 
 // ─── Proxy ───────────────────────────────────────────────────────────────────
-app.on(["GET", "POST", "HEAD"], "/stream/:encrypted", async (c) => {
+app.on(["GET", "POST", "HEAD"], ["/stream/:encrypted", "/m3u8/:encrypted", "/hls/:encrypted"], async (c) => {
   const method = c.req.method;
+  const isM3u8Route = c.req.path.startsWith("/m3u8/");
+  const isHlsRoute = c.req.path.startsWith("/hls/");
 
   const targetUrlRaw = decryptUrl(c.req.param("encrypted"));
   if (!targetUrlRaw) return c.text("Invalid encrypted URL", 400);
@@ -169,7 +171,8 @@ app.on(["GET", "POST", "HEAD"], "/stream/:encrypted", async (c) => {
     const location = upstream.headers.get("location");
     if (location) {
       const resolvedLocation = resolveUrl(location, targetUrl);
-      return c.redirect(buildProxyPath(resolvedLocation, encryptUrl), upstream.status as any);
+      const routePrefix = isM3u8Route ? "/m3u8/" : isHlsRoute ? "/hls/" : "/stream/";
+      return c.redirect(buildProxyPath(resolvedLocation, encryptUrl, routePrefix), upstream.status as any);
     }
   }
 
@@ -179,7 +182,7 @@ app.on(["GET", "POST", "HEAD"], "/stream/:encrypted", async (c) => {
   }
 
   const contentType = upstream.headers.get("content-type") ?? "";
-  const isM3u8 = contentType.includes("mpegurl") || pathname.endsWith(".m3u8") || pathname.endsWith(".M3U8");
+  const isM3u8 = isM3u8Route || contentType.includes("mpegurl") || pathname.endsWith(".m3u8") || pathname.endsWith(".M3U8");
   if (!isM3u8) {
     const contentLength = upstream.headers.get("content-length");
     if (contentLength) responseHeaders["Content-Length"] = contentLength;
@@ -187,7 +190,7 @@ app.on(["GET", "POST", "HEAD"], "/stream/:encrypted", async (c) => {
   const lowerPathname = pathname.toLowerCase();
   const isCacheableAsset = /\.(?:ts|m4s|aac|vtt|jpg|jpeg|png|webp|gif|css|js|html?)$/i.test(lowerPathname);
 
-  if (isCacheableAsset) {
+  if (isHlsRoute || isCacheableAsset) {
     responseHeaders["Cache-Control"] = "public, max-age=31536000, s-maxage=31536000, immutable";
     responseHeaders["CDN-Cache-Control"] = "public, max-age=31536000, s-maxage=31536000, immutable";
     responseHeaders["Cloudflare-CDN-Cache-Control"] = "public, max-age=31536000, s-maxage=31536000, immutable";

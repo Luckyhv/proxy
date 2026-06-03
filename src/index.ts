@@ -159,6 +159,7 @@ app.on(["GET", "POST", "HEAD"], "/stream/:encrypted", async (c) => {
   const dotIdx = pathname.lastIndexOf(".");
   const ext = dotIdx !== -1 ? pathname.slice(dotIdx + 1).toLowerCase() : "";
   const isMediaSegment = ext === "ts" || ext === "mp4" || ext === "m4s" || ext === "aac" || ext === "vtt" || ext === "webm";
+  const isProgressiveMedia = ext === "mp4" || ext === "webm";
 
   const responseHeaders: Record<string, string> = {};
   for (const [name, value] of upstream.headers.entries()) {
@@ -166,7 +167,26 @@ app.on(["GET", "POST", "HEAD"], "/stream/:encrypted", async (c) => {
   }
 
   if (isMediaSegment) {
-    responseHeaders["Cache-Control"] = MEDIA_CACHE_CONTROL;
+    // Progressive media must keep Range requests end-to-end. If Cloudflare is allowed
+    // to cache these as immutable objects it can fetch a full 200 response on cache
+    // miss, which makes the browser treat the video as non-seekable.
+    const isRangeSeekable =
+      isProgressiveMedia ||
+      upstream.status === 206 ||
+      rangeVal != null ||
+      upstream.headers.get("accept-ranges") === "bytes";
+
+    if (isRangeSeekable) {
+      responseHeaders["Cache-Control"] = "public, max-age=3600";
+      responseHeaders["CDN-Cache-Control"] = "no-store";
+      responseHeaders["Cloudflare-CDN-Cache-Control"] = "no-store";
+      responseHeaders["Accept-Ranges"] = "bytes";
+      responseHeaders["Vary"] = "Origin, Range";
+    } else {
+      responseHeaders["Cache-Control"] = MEDIA_CACHE_CONTROL;
+      responseHeaders["CDN-Cache-Control"] = MEDIA_CACHE_CONTROL;
+      responseHeaders["Cloudflare-CDN-Cache-Control"] = MEDIA_CACHE_CONTROL;
+    }
   }
 
   const contentType = upstream.headers.get("content-type") ?? "";
@@ -192,7 +212,13 @@ app.on(["GET", "POST", "HEAD"], "/stream/:encrypted", async (c) => {
           start = end + 1;
         }
 
-        return c.body(rewritten, upstream.status as ContentfulStatusCode, { ...responseHeaders, "Content-Type": "application/vnd.apple.mpegurl", "Cache-Control": "no-cache, no-store, must-revalidate" });
+        return c.body(rewritten, upstream.status as ContentfulStatusCode, {
+          ...responseHeaders,
+          "Content-Type": "application/vnd.apple.mpegurl",
+          "Cache-Control": "public, max-age=300, s-maxage=14400",
+          "CDN-Cache-Control": "public, max-age=14400",
+          "Cloudflare-CDN-Cache-Control": "public, max-age=14400",
+        });
       }
       return c.body(textBody, upstream.status as ContentfulStatusCode, responseHeaders);
     } catch {

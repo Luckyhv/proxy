@@ -104,8 +104,10 @@ app.on(["GET", "POST", "HEAD"], "/stream/:encrypted", async (c) => {
   const clientHeaders = c.req.raw.headers;
   const rangeVal = clientHeaders.get("range");
   if (rangeVal) {
-    upstreamHeaders["range"] = rangeVal;
-    upstreamHeaders["accept-encoding"] = "identity";
+    delete upstreamHeaders["range"];
+    delete upstreamHeaders["accept-encoding"];
+    upstreamHeaders["Range"] = rangeVal;
+    upstreamHeaders["Accept-Encoding"] = "identity";
   }
   const ifRangeVal = clientHeaders.get("if-range");
   if (ifRangeVal) upstreamHeaders["if-range"] = ifRangeVal;
@@ -166,9 +168,17 @@ app.on(["GET", "POST", "HEAD"], "/stream/:encrypted", async (c) => {
   for (const [name, value] of upstream.headers.entries()) {
     if (!BLACKLIST_HEADERS.has(name)) { responseHeaders[name] = value; }
   }
+  responseHeaders["X-Proxy-Range-In"] = rangeVal ?? "";
+  responseHeaders["X-Proxy-Range-Out"] = upstreamHeaders["Range"] ?? upstreamHeaders["range"] ?? "";
+  responseHeaders["X-Proxy-Upstream-Status"] = String(upstream.status);
+  responseHeaders["X-Proxy-Upstream-Content-Range"] = upstream.headers.get("content-range") ?? "";
 
   const contentType = upstream.headers.get("content-type") ?? "";
   const isM3u8 = contentType.includes("mpegurl") || pathname.endsWith(".m3u8") || pathname.endsWith(".M3U8");
+  if (!isM3u8) {
+    const contentLength = upstream.headers.get("content-length");
+    if (contentLength) responseHeaders["Content-Length"] = contentLength;
+  }
   const isFromHlsPlaylist = c.req.query("hls") === "1";
   const lowerPathname = pathname.toLowerCase();
   const isHlsSegment =

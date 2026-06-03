@@ -42,6 +42,142 @@ function decryptUrl(encrypted: string): string | null {
   }
 }
 
+interface ByteRange {
+  start: number;
+  end: number;
+}
+
+function parseByteRange(range: string | null, total: number): ByteRange | null {
+  if (!range || !Number.isFinite(total) || total <= 0) return null;
+
+  const match = /^bytes=(\d*)-(\d*)$/i.exec(range.trim());
+  if (!match) return null;
+
+  const [, rawStart, rawEnd] = match;
+  if (!rawStart && !rawEnd) return null;
+
+  let start: number;
+  let end: number;
+
+  if (!rawStart) {
+    const suffixLength = Number(rawEnd);
+    if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) return null;
+    start = Math.max(total - suffixLength, 0);
+    end = total - 1;
+  } else {
+    start = Number(rawStart);
+    end = rawEnd ? Number(rawEnd) : total - 1;
+  }
+
+  if (
+    !Number.isSafeInteger(start) ||
+    !Number.isSafeInteger(end) ||
+    start < 0 ||
+    end < start ||
+    start >= total
+  ) {
+    return null;
+  }
+
+  return { start, end: Math.min(end, total - 1) };
+}
+
+function sliceStream(
+  stream: ReadableStream<Uint8Array> | null,
+  range: ByteRange,
+): ReadableStream<Uint8Array> | null {
+  if (!stream) return null;
+
+  const reader = stream.getReader();
+  let offset = 0;
+  let sent = 0;
+  const targetLength = range.end - range.start + 1;
+
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      while (sent < targetLength) {
+        const { done, value } = await reader.read();
+        if (done) {
+          controller.close();
+          return;
+        }
+
+        const chunkStart = offset;
+        const chunkEnd = offset + value.byteLength - 1;
+        offset += value.byteLength;
+
+        if (chunkEnd < range.start) continue;
+        if (chunkStart > range.end) {
+          controller.close();
+          return;
+        }
+
+        const sliceStart = Math.max(range.start - chunkStart, 0);
+        const sliceEnd = Math.min(range.end - chunkStart + 1, value.byteLength);
+        const nextChunk = value.subarray(sliceStart, sliceEnd);
+        sent += nextChunk.byteLength;
+        controller.enqueue(nextChunk);
+        return;
+      }
+
+      controller.close();
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+}
+
+function parseTotalLength(headers: Headers): number | null {
+  const contentRange = headers.get("content-range");
+  if (contentRange) {
+    const match = /\/(\d+)\s*$/.exec(contentRange);
+    if (match) {
+      const total = Number(match[1]);
+      if (Number.isSafeInteger(total) && total > 0) return total;
+    }
+  }
+
+  const contentLength = Number(headers.get("content-length"));
+  return Number.isSafeInteger(contentLength) && contentLength > 0 ? contentLength : null;
+}
+
+function parseContentRangeLength(headers: Headers): number | null {
+  const contentRange = headers.get("content-range");
+  if (!contentRange) return null;
+
+  const match = /^bytes\s+(\d+)-(\d+)\/(?:\d+|\*)\s*$/i.exec(contentRange);
+  if (!match) return null;
+
+  const start = Number(match[1]);
+  const end = Number(match[2]);
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || end < start) return null;
+
+  return end - start + 1;
+}
+
+async function fetchContentLength(
+  url: URL,
+  headers: Record<string, string>,
+): Promise<number | null> {
+  const metadataHeaders = { ...headers };
+  delete metadataHeaders["range"];
+  delete metadataHeaders["if-range"];
+
+  try {
+    const metadata = await fetch(url.href, {
+      method: "HEAD",
+      headers: metadataHeaders,
+      redirect: "manual",
+      // @ts-ignore
+      tls: { rejectUnauthorized: false },
+    });
+    return parseTotalLength(metadata.headers);
+  } catch {
+    return null;
+  }
+}
+
 export function encryptUrl(url: string, referer = ""): string {
   const target = new TextEncoder().encode(url);
   const ref = new TextEncoder().encode(referer);
@@ -94,7 +230,14 @@ app.on(["GET", "POST", "HEAD"], "/stream/:encrypted", async (c) => {
   let targetUrl: URL;
   try { targetUrl = new URL(targetUrlRaw); } catch { return c.text(`Invalid URL: ${targetUrlRaw}`, 400); }
 
+  const pathname = targetUrl.pathname;
+  const dotIdx = pathname.lastIndexOf(".");
+  const ext = dotIdx !== -1 ? pathname.slice(dotIdx + 1).toLowerCase() : "";
+  const isMediaSegment = ext === "ts" || ext === "mp4" || ext === "m4s" || ext === "aac" || ext === "vtt" || ext === "webm";
+  const isProgressiveMedia = ext === "mp4" || ext === "webm";
+
   const upstreamHeaders = generateHeadersOriginal(targetUrl);
+  if (isMediaSegment) upstreamHeaders["accept-encoding"] = "identity";
 
   // Forward standard headers
   const clientHeaders = c.req.raw.headers;
@@ -155,15 +298,24 @@ app.on(["GET", "POST", "HEAD"], "/stream/:encrypted", async (c) => {
     }
   }
 
-  const pathname = targetUrl.pathname;
-  const dotIdx = pathname.lastIndexOf(".");
-  const ext = dotIdx !== -1 ? pathname.slice(dotIdx + 1).toLowerCase() : "";
-  const isMediaSegment = ext === "ts" || ext === "mp4" || ext === "m4s" || ext === "aac" || ext === "vtt" || ext === "webm";
-  const isProgressiveMedia = ext === "mp4" || ext === "webm";
-
   const responseHeaders: Record<string, string> = {};
   for (const [name, value] of upstream.headers.entries()) {
     if (!BLACKLIST_HEADERS.has(name)) { responseHeaders[name] = value; }
+  }
+
+  const upstreamLength =
+    parseTotalLength(upstream.headers) ??
+    (isProgressiveMedia && rangeVal ? await fetchContentLength(targetUrl, upstreamHeaders) : null);
+  const requestedRange = upstreamLength == null ? null : parseByteRange(rangeVal, upstreamLength);
+  if (isProgressiveMedia && rangeVal && !requestedRange && upstreamLength != null) {
+    return c.body(null, 416, {
+      ...responseHeaders,
+      "Accept-Ranges": "bytes",
+      "Content-Range": `bytes */${upstreamLength}`,
+      "Cache-Control": "public, max-age=3600",
+      "CDN-Cache-Control": "no-store",
+      "Cloudflare-CDN-Cache-Control": "no-store",
+    });
   }
 
   if (isMediaSegment) {
@@ -182,11 +334,33 @@ app.on(["GET", "POST", "HEAD"], "/stream/:encrypted", async (c) => {
       responseHeaders["Cloudflare-CDN-Cache-Control"] = "no-store";
       responseHeaders["Accept-Ranges"] = "bytes";
       responseHeaders["Vary"] = "Origin, Range";
+      if (isProgressiveMedia && upstream.status === 206) {
+        const partialLength =
+          Number(upstream.headers.get("content-length")) ||
+          parseContentRangeLength(upstream.headers);
+        if (partialLength && Number.isSafeInteger(partialLength)) {
+          responseHeaders["Content-Length"] = String(partialLength);
+        }
+      }
     } else {
       responseHeaders["Cache-Control"] = MEDIA_CACHE_CONTROL;
       responseHeaders["CDN-Cache-Control"] = MEDIA_CACHE_CONTROL;
       responseHeaders["Cloudflare-CDN-Cache-Control"] = MEDIA_CACHE_CONTROL;
     }
+  }
+
+  if (isProgressiveMedia && upstream.status === 200 && requestedRange && upstreamLength != null) {
+    const rangeLength = requestedRange.end - requestedRange.start + 1;
+    return c.body(
+      method === "HEAD" ? null : sliceStream(upstream.body as ReadableStream<Uint8Array>, requestedRange),
+      206,
+      {
+        ...responseHeaders,
+        "Accept-Ranges": "bytes",
+        "Content-Range": `bytes ${requestedRange.start}-${requestedRange.end}/${upstreamLength}`,
+        "Content-Length": String(rangeLength),
+      },
+    );
   }
 
   const contentType = upstream.headers.get("content-type") ?? "";

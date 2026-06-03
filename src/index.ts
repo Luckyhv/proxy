@@ -103,7 +103,10 @@ app.on(["GET", "POST", "HEAD"], "/stream/:encrypted", async (c) => {
   // Forward standard headers
   const clientHeaders = c.req.raw.headers;
   const rangeVal = clientHeaders.get("range");
-  if (rangeVal) upstreamHeaders["range"] = rangeVal;
+  if (rangeVal) {
+    upstreamHeaders["range"] = rangeVal;
+    upstreamHeaders["accept-encoding"] = "identity";
+  }
   const ifRangeVal = clientHeaders.get("if-range");
   if (ifRangeVal) upstreamHeaders["if-range"] = ifRangeVal;
   const ifNoneMatchVal = clientHeaders.get("if-none-match");

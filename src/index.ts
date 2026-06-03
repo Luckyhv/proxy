@@ -6,6 +6,8 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import {
   ALLOWED_ORIGINS,
   BLACKLIST_HEADERS,
+  UPSTREAM_PROXY,
+  shouldProxyUpstream,
 } from "./constants";
 import { generateHeadersOriginal } from "./headers";
 import { processM3u8Line, resolveUrl, buildProxyPath } from "./processor";
@@ -57,7 +59,9 @@ const trustedOrigins = Array.from(ALLOWED_ORIGINS);
 
 const app = new Hono()
 
-app.use(logger())
+if (process.env.LOG_REQUESTS === "1") {
+  app.use(logger())
+}
 
 app.use(
   cors({
@@ -140,15 +144,20 @@ app.on(["GET", "POST", "HEAD"], "/stream/:encrypted", async (c) => {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
 
-    upstream = await fetch(targetUrl.href, {
+    const fetchInit: any = {
       method,
       headers: upstreamHeaders,
       body,
       redirect: "manual",
-      // @ts-ignore
       tls: { rejectUnauthorized: false },
       signal: controller.signal,
-    });
+    };
+    // Route through a clean egress proxy for hosts that block our datacenter IP.
+    if (shouldProxyUpstream(targetUrl.hostname)) {
+      fetchInit.proxy = UPSTREAM_PROXY;
+    }
+
+    upstream = await fetch(targetUrl.href, fetchInit);
     clearTimeout(timeout);
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
@@ -168,10 +177,6 @@ app.on(["GET", "POST", "HEAD"], "/stream/:encrypted", async (c) => {
   for (const [name, value] of upstream.headers.entries()) {
     if (!BLACKLIST_HEADERS.has(name)) { responseHeaders[name] = value; }
   }
-  responseHeaders["X-Proxy-Range-In"] = rangeVal ?? "";
-  responseHeaders["X-Proxy-Range-Out"] = upstreamHeaders["Range"] ?? upstreamHeaders["range"] ?? "";
-  responseHeaders["X-Proxy-Upstream-Status"] = String(upstream.status);
-  responseHeaders["X-Proxy-Upstream-Content-Range"] = upstream.headers.get("content-range") ?? "";
 
   const contentType = upstream.headers.get("content-type") ?? "";
   const isM3u8 = contentType.includes("mpegurl") || pathname.endsWith(".m3u8") || pathname.endsWith(".M3U8");
@@ -179,16 +184,10 @@ app.on(["GET", "POST", "HEAD"], "/stream/:encrypted", async (c) => {
     const contentLength = upstream.headers.get("content-length");
     if (contentLength) responseHeaders["Content-Length"] = contentLength;
   }
-  const isFromHlsPlaylist = c.req.query("hls") === "1";
   const lowerPathname = pathname.toLowerCase();
-  const isHlsSegment =
-    isFromHlsPlaylist ||
-    lowerPathname.endsWith(".ts") ||
-    lowerPathname.endsWith(".m4s") ||
-    lowerPathname.endsWith(".aac") ||
-    lowerPathname.endsWith(".vtt");
+  const isCacheableAsset = /\.(?:ts|m4s|aac|vtt|jpg|jpeg|png|webp|gif|css|js|html?)$/i.test(lowerPathname);
 
-  if (isHlsSegment) {
+  if (isCacheableAsset) {
     responseHeaders["Cache-Control"] = "public, max-age=31536000, s-maxage=31536000, immutable";
     responseHeaders["CDN-Cache-Control"] = "public, max-age=31536000, s-maxage=31536000, immutable";
     responseHeaders["Cloudflare-CDN-Cache-Control"] = "public, max-age=31536000, s-maxage=31536000, immutable";

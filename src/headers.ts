@@ -152,7 +152,7 @@ export const DOMAIN_GROUPS: DomainGroup[] = [
     },
     {
         patterns: [/\.vid-cdn\.xyz$/i],
-        origin: "https://anizone.to/",
+        origin: "https://anizone.to",
         referer: "https://anizone.to/",
     },
     {

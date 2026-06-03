@@ -74,3 +74,26 @@ export const BLACKLIST_HEADERS = new Set([
 ]);
 
 export const MEDIA_CACHE_CONTROL = "public, max-age=31536000, s-maxage=31536000, immutable";
+
+// ─── Upstream egress proxy ───────────────────────────────────────────────────
+// Some CDNs (e.g. vid-cdn.xyz) sit behind Cloudflare and block our datacenter
+// egress IP with a 403. Routing the upstream fetch through a clean/residential
+// proxy bypasses that. Set UPSTREAM_PROXY to an http(s)/socks proxy URL, e.g.
+//   UPSTREAM_PROXY=http://user:pass@host:port
+// By default the proxy is only used for hosts listed in UPSTREAM_PROXY_DOMAINS
+// (comma-separated hostname suffixes). Leave that empty to proxy ALL upstream
+// traffic instead.
+export const UPSTREAM_PROXY = (process.env.UPSTREAM_PROXY ?? "").trim();
+
+export const UPSTREAM_PROXY_DOMAINS = (process.env.UPSTREAM_PROXY_DOMAINS ?? "vid-cdn.xyz")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+
+/** Whether the upstream fetch to `hostname` should be routed via UPSTREAM_PROXY. */
+export function shouldProxyUpstream(hostname: string): boolean {
+    if (!UPSTREAM_PROXY) return false;
+    if (UPSTREAM_PROXY_DOMAINS.length === 0) return true; // proxy everything
+    const h = hostname.toLowerCase();
+    return UPSTREAM_PROXY_DOMAINS.some((d) => h === d || h.endsWith(`.${d}`));
+}

@@ -34,15 +34,20 @@ function rewriteUriAttrs(attrs: string, scrapeUrl: URL, encrypt: (u: string) => 
         const eqPos = attrs.indexOf("=", i);
         if (eqPos === -1) { result += attrs.slice(i); break; }
 
-        const key = attrs.slice(i, eqPos);
+        const rawKey = attrs.slice(i, eqPos);
+        // A preceding quoted attr leaves `i` on the trailing comma, so the raw key
+        // can carry a leading "," (and/or whitespace). Strip it for matching, but
+        // keep it as a separator in the output.
+        const trimmedKey = rawKey.replace(/^[,\s]*/, "");
+        const sep = rawKey.slice(0, rawKey.length - trimmedKey.length);
         const afterEq = eqPos + 1;
 
-        if ((key === "URI" || key === "URL") && attrs[afterEq] === '"') {
+        if ((trimmedKey === "URI" || trimmedKey === "URL") && attrs[afterEq] === '"') {
             const parsed = extractQuotedAttr(attrs, afterEq);
             if (parsed) {
                 const [value, afterClose] = parsed;
                 const resolved = resolveUrl(value, scrapeUrl);
-                result += `${key}="${buildProxyPath(resolved, encrypt)}"`;
+                result += `${sep}${trimmedKey}="${buildProxyPath(resolved, encrypt)}"`;
                 i = afterClose;
                 continue;
             }

@@ -141,9 +141,20 @@ app.on(["GET", "POST", "HEAD"], ["/stream/:encrypted", "/m3u8/:encrypted", "/hls
     body = await c.req.arrayBuffer();
   }
 
+  // One controller for the whole request lifecycle: it aborts on the connect
+  // timeout AND when the client disconnects. Without the client-disconnect
+  // wiring, abandoned downloads (seeks, quality switches, closed tabs — the
+  // dominant pattern for a video proxy) keep the upstream socket and its
+  // in-flight buffers alive until the remote times out, leaking RAM until OOM.
+  const controller = new AbortController();
+  const clientSignal = c.req.raw.signal;
+  if (clientSignal) {
+    if (clientSignal.aborted) controller.abort();
+    else clientSignal.addEventListener("abort", () => controller.abort(), { once: true });
+  }
+
   let upstream: Response;
   try {
-    const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
 
     const fetchInit: any = {

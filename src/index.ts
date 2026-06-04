@@ -245,7 +245,15 @@ app.on(["GET", "POST", "HEAD"], ["/stream/:encrypted", "/m3u8/:encrypted", "/hls
 });
 
 
-export default {
-  port: process.env.PORT || 3847,
+const port = Number(process.env.PORT) || 3847;
+
+// Start the listener explicitly. Bun's "auto-serve from default export" only
+// fires when the file is run as the main entry in certain ways, and it does NOT
+// trigger reliably under PM2 — so we call Bun.serve() directly instead.
+Bun.serve({
+  port,
   fetch: app.fetch,
-}
+  idleTimeout: 60, // seconds; long enough for slow segment fetches, short enough to reap dead conns
+});
+
+console.log(`proxy listening on :${port}`);

@@ -63,9 +63,15 @@ if (process.env.LOG_REQUESTS === "1") {
   app.use(logger())
 }
 
+// CORS is intentionally wildcard with NO credentials. A media proxy never needs
+// cookies, and `credentials: true` forces Hono to (a) reflect the specific
+// request Origin instead of "*" and (b) emit `Vary: Origin` — both of which
+// fragment/poison Cloudflare's edge cache so every viewer/origin misses. A flat
+// "*" with no Vary is what lets one cached segment be shared by everyone (this
+// is exactly what the fast rival proxy does).
 app.use(
   cors({
-    origin: trustedOrigins.length === 0 ? "*" : trustedOrigins,
+    origin: "*",
     allowHeaders: [
       "Content-Type", "Authorization", "Range", "X-Requested-With",
       "Origin", "Referer", "Accept", "Accept-Encoding", "Accept-Language",
@@ -76,10 +82,9 @@ app.use(
     allowMethods: ["GET", "POST", "OPTIONS", "HEAD"],
     exposeHeaders: [
       "Content-Length", "Content-Range", "Accept-Ranges", "Content-Type",
-      "Cache-Control", "Expires", "Vary", "ETag", "Last-Modified",
+      "Cache-Control", "Expires", "ETag", "Last-Modified",
     ],
     maxAge: 86400,
-    credentials: true,
   })
 );
 
@@ -199,9 +204,19 @@ app.on(["GET", "POST", "HEAD"], ["/stream/:encrypted", "/m3u8/:encrypted", "/hls
     if (contentLength) responseHeaders["Content-Length"] = contentLength;
   }
   const lowerPathname = pathname.toLowerCase();
-  const isCacheableAsset = /\.(?:ts|m4s|aac|vtt|jpg|jpeg|png|webp|gif|css|js|html?)$/i.test(lowerPathname);
+  const isCacheableAsset = /\.(?:ts|m4s|mp4|m4v|mov|webm|m4a|mp3|aac|vtt|jpg|jpeg|png|webp|gif|css|js|html?)$/i.test(lowerPathname);
 
-  if (isHlsRoute || isCacheableAsset) {
+  // Only success bodies are real content. 200 = full asset, 206 = a byte-range
+  // (mp4 seeking) — both safe to cache. Anything else (403/404/5xx, often just a
+  // transient upstream blip) must NEVER get a long cache header, or Cloudflare
+  // would pin the failure at the edge for a year and break that episode.
+  const isCacheableStatus = upstream.status === 200 || upstream.status === 206;
+
+  if (!isCacheableStatus) {
+    responseHeaders["Cache-Control"] = "no-store";
+    responseHeaders["CDN-Cache-Control"] = "no-store";
+    responseHeaders["Cloudflare-CDN-Cache-Control"] = "no-store";
+  } else if (isHlsRoute || isCacheableAsset) {
     responseHeaders["Cache-Control"] = "public, max-age=31536000, s-maxage=31536000, immutable";
     responseHeaders["CDN-Cache-Control"] = "public, max-age=31536000, s-maxage=31536000, immutable";
     responseHeaders["Cloudflare-CDN-Cache-Control"] = "public, max-age=31536000, s-maxage=31536000, immutable";
@@ -227,12 +242,21 @@ app.on(["GET", "POST", "HEAD"], ["/stream/:encrypted", "/m3u8/:encrypted", "/hls
           start = end + 1;
         }
 
+        const manifestCache = isCacheableStatus
+          ? {
+              "Cache-Control": "public, max-age=300, s-maxage=14400",
+              "CDN-Cache-Control": "public, max-age=14400",
+              "Cloudflare-CDN-Cache-Control": "public, max-age=14400",
+            }
+          : {
+              "Cache-Control": "no-store",
+              "CDN-Cache-Control": "no-store",
+              "Cloudflare-CDN-Cache-Control": "no-store",
+            };
         return c.body(rewritten, upstream.status as ContentfulStatusCode, {
           ...responseHeaders,
           "Content-Type": "application/vnd.apple.mpegurl",
-          "Cache-Control": "public, max-age=300, s-maxage=14400",
-          "CDN-Cache-Control": "public, max-age=14400",
-          "Cloudflare-CDN-Cache-Control": "public, max-age=14400",
+          ...manifestCache,
         });
       }
       return c.body(textBody, upstream.status as ContentfulStatusCode, responseHeaders);
